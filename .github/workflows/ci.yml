@@ -1,0 +1,105 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore GuessNumber.sln
+
+      - name: Build solution
+        run: dotnet build GuessNumber.sln --configuration Release
+
+      - name: Run tests
+        run: dotnet test GuessNumber.sln --logger "trx;LogFileName=test_results.trx"
+
+  analysis:
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Count lines of code with CLOC
+        run: |
+          choco install cloc -y
+          cloc GuessNumber > cloc-report.txt
+          type cloc-report.txt
+
+      - name: Run SonarCloud analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORG: ${{ secrets.SONAR_ORG }}
+        run: |
+          dotnet tool install --global dotnet-sonarscanner
+          dotnet sonarscanner begin /k:"andry12344321_GuessNumberProject2" /o:"$env:SONAR_ORG" /d:sonar.login="$env:SONAR_TOKEN"
+          dotnet build GuessNumber.sln
+          dotnet sonarscanner end /d:sonar.login="$env:SONAR_TOKEN"
+
+      - name: Code Review Check for main
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.setFailed("Це не Pull Request");
+              return;
+            }
+
+            const prNumber = pr.number;
+            const prAuthor = pr.user.login;
+
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            console.log("Знайдені рев’ю:");
+            reviews.forEach(r => {
+              console.log(`User: ${r.user.login}, State: ${r.state}`);
+            });
+
+            if (pr.user.login === context.actor) {
+              console.log("Автор PR - це виконавець workflow, рев’ю пропущено");
+            } else {
+              const approved = reviews.some(review => review.state === 'APPROVED');
+              if (!approved) {
+                core.setFailed("Код-рев’ю не схвалено");
+              } else {
+                console.log("Є схвалене рев’ю");
+              }
+            }
+
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@v1.4.0
+        with:
+          reviewdog_version: latest
+
+      - name: Run StyleCop with Reviewdog
+        run: |
+            $env:REVIEWDOG_GITHUB_API_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+            dotnet build GuessNumber.sln /p:RunAnalyzersDuringBuild=true | reviewdog -f=msbuild -name="StyleCop" -reporter=github-pr-review -level=error
+
+      - name: Run dotnet format with Reviewdog
+        run: |
+            $env:REVIEWDOG_GITHUB_API_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+            dotnet format GuessNumber.sln --verify-no-changes | reviewdog -f=msbuild -name="dotnet-format" -reporter=github-pr-review -level=info
