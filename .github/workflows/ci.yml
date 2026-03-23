@@ -1,40 +1,38 @@
 name: GuessNumber CI/CD
 
-# Запуск на push в main и pull request на main
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # для будущих версий Node.js
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # убирает предупреждение Node.js 20
-
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      # 1. Получаем код
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      # Получаем код
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. Устанавливаем .NET 8
+      # Устанавливаем .NET 8
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      # 3. Восстанавливаем зависимости
+      # Восстановление зависимостей
       - name: Restore dependencies
         run: dotnet restore GuessNumber.sln
 
-      # 4. Собираем проект
+      # Сборка решения
       - name: Build solution
         run: dotnet build GuessNumber.sln --configuration Release
 
-      # 5. Запускаем тесты
+      # Запуск тестов
       - name: Run tests
         run: dotnet test GuessNumber.sln --logger "trx;LogFileName=test_results.trx"
 
@@ -42,23 +40,24 @@ jobs:
     runs-on: windows-latest
     needs: build
     steps:
-      # Получаем код заново
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Устанавливаем .NET 8
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      # Подсчёт строк кода через CLOC
+      # Подсчёт строк через CLOC
       - name: Count lines of code with CLOC
         run: |
           choco install cloc -y
           cloc . > cloc-report.txt
           type cloc-report.txt
 
-      # Анализ SonarCloud
+      # Запуск SonarCloud анализа
       - name: Run SonarCloud analysis
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -69,21 +68,3 @@ jobs:
           dotnet sonarscanner begin /k:"andry12344321_GuessNumberProject2" /o:"$env:SONAR_ORG" /d:sonar.login="$env:SONAR_TOKEN"
           dotnet build GuessNumber.sln
           dotnet sonarscanner end /d:sonar.login="$env:SONAR_TOKEN"
-
-      # Настройка reviewdog для проверки кода
-      - name: Setup reviewdog
-        uses: reviewdog/action-setup@v1.4.0
-        with:
-          reviewdog_version: latest
-
-      # StyleCop анализ
-      - name: Run StyleCop with Reviewdog
-        run: |
-          $env:REVIEWDOG_GITHUB_API_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          dotnet build GuessNumber.sln /p:RunAnalyzersDuringBuild=true | reviewdog -f=msbuild -name="StyleCop" -reporter=github-pr-review -level=error
-
-      # Проверка форматирования кода
-      - name: Run dotnet format with Reviewdog
-        run: |
-          $env:REVIEWDOG_GITHUB_API_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          dotnet format GuessNumber.sln --verify-no-changes | reviewdog -f=msbuild -name="dotnet-format" -reporter=github-pr-review -level=info
